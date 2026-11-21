@@ -101,6 +101,10 @@ struct zram_stats {
 	atomic64_t pages_stored;	/* no. of pages currently stored */
 	atomic_long_t max_used_pages;	/* no. of maximum pages stored */
 	atomic64_t miss_free;		/* no. of missed free */
+	atomic64_t recomp_attempted_pages;	/* pages passed to recompressor */
+	atomic64_t recomp_saved_pages;	/* pages moved to a smaller zs class */
+	atomic64_t recomp_errors;	/* per-page recompression errors */
+	atomic64_t recomp_time_ns;	/* time spent scanning/recompressing */
 #ifdef	CONFIG_ZRAM_WRITEBACK
 	atomic64_t bd_count;		/* no. of pages in backing device */
 	atomic64_t bd_reads;		/* no. of reads from backing device */

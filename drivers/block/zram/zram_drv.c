@@ -35,6 +35,7 @@
 #include <linux/scatterlist.h>
 #include <linux/kernel_read_file.h>
 #include <linux/rcupdate.h>
+#include <linux/ktime.h>
 
 #include "zram_drv.h"
 
@@ -1971,15 +1972,24 @@ static ssize_t mm_stat_show(struct device *dev, struct device_attribute *attr,
 static ssize_t debug_stat_show(struct device *dev,
 			       struct device_attribute *attr, char *buf)
 {
-	int version = 1;
+	int version = 2;
 	struct zram *zram = dev_to_zram(dev);
 	ssize_t ret;
 
 	guard(rwsem_read)(&zram->dev_lock);
 	ret = sysfs_emit(buf,
-			"version: %d\n0 %8llu\n",
+			"version: %d\n"
+			"miss_free %8llu\n"
+			"recompress_attempted_pages %8llu\n"
+			"recompress_saved_pages %8llu\n"
+			"recompress_errors %8llu\n"
+			"recompress_time_ns %8llu\n",
 			version,
-			(u64)atomic64_read(&zram->stats.miss_free));
+			(u64)atomic64_read(&zram->stats.miss_free),
+			(u64)atomic64_read(&zram->stats.recomp_attempted_pages),
+			(u64)atomic64_read(&zram->stats.recomp_saved_pages),
+			(u64)atomic64_read(&zram->stats.recomp_errors),
+			(u64)atomic64_read(&zram->stats.recomp_time_ns));
 
 	return ret;
 }
@@ -2484,6 +2494,7 @@ static int recompress_slot(struct zram *zram, unsigned long index,
 
 	zstrm = zcomp_stream_get(zram->comps[prio]);
 	src = kmap_local_page(page);
+	atomic64_inc(&zram->stats.recomp_attempted_pages);
 	ret = zcomp_compress(zram->comps[prio], zstrm, src, &comp_len_new);
 	kunmap_local(src);
 
@@ -2549,6 +2560,7 @@ static int recompress_slot(struct zram *zram, unsigned long index,
 
 	atomic64_add(comp_len_new, &zram->stats.compr_data_size);
 	atomic64_inc(&zram->stats.pages_stored);
+	atomic64_inc(&zram->stats.recomp_saved_pages);
 
 	return 0;
 }
@@ -2567,6 +2579,7 @@ static ssize_t recompress_store(struct device *dev,
 	struct page *page = NULL;
 	bool prio_param = false;
 	ssize_t ret;
+	u64 start_ns;
 
 	args = skip_spaces(buf);
 	while (*args) {
@@ -2662,6 +2675,7 @@ static ssize_t recompress_store(struct device *dev,
 		goto out;
 	}
 
+	start_ns = ktime_get_ns();
 	scan_slots_for_recompress(zram, mode, prio, ctl);
 
 	ret = len;
@@ -2682,12 +2696,15 @@ next:
 		release_pp_slot(zram, pps);
 
 		if (err) {
+			atomic64_inc(&zram->stats.recomp_errors);
 			ret = err;
 			break;
 		}
 
 		cond_resched();
 	}
+	atomic64_add(ktime_get_ns() - start_ns,
+		     &zram->stats.recomp_time_ns);
 
 out:
 	if (page)
