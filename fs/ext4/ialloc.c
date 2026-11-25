@@ -888,8 +888,7 @@ static int ext4_xattr_credits_for_new_inode(struct inode *dir, mode_t mode,
 
 		nblocks += (S_ISDIR(mode) ? 2 : 1) *
 			__ext4_xattr_set_credits(sb, NULL /* inode */,
-						 NULL /* block_bh */, acl_size,
-						 true /* is_create */);
+						 NULL /* block_bh */, acl_size);
 		posix_acl_release(p);
 	}
 #endif
@@ -907,16 +906,14 @@ static int ext4_xattr_credits_for_new_inode(struct inode *dir, mode_t mode,
 		 */
 		nblocks += num_security_xattrs *
 			__ext4_xattr_set_credits(sb, NULL /* inode */,
-						 NULL /* block_bh */, 1024,
-						 true /* is_create */);
+						 NULL /* block_bh */, 1024);
 	}
 #endif
 	if (encrypt)
 		nblocks += __ext4_xattr_set_credits(sb,
 						    NULL /* inode */,
 						    NULL /* block_bh */,
-						    FSCRYPT_SET_CONTEXT_MAX_SIZE,
-						    true /* is_create */);
+						    FSCRYPT_SET_CONTEXT_MAX_SIZE);
 	return nblocks;
 }
 
@@ -1006,9 +1003,18 @@ struct inode *__ext4_new_inode(const struct mnt_idmap *idmap,
 		goto out;
 
 	if (!handle && sbi->s_journal && !(i_flags & EXT4_EA_INODE_FL)) {
+		int max_credits, revoke_credits;
+		journal_t *journal = sbi->s_journal;
+
 		ret2 = ext4_xattr_credits_for_new_inode(dir, mode, encrypt);
 		if (ret2 < 0) {
 			err = ret2;
+			goto out;
+		}
+		revoke_credits = ext4_trans_default_revoke_credits(sb);
+		max_credits = jbd2_journal_get_max_transaction_buffers(journal, revoke_credits);
+		if (nblocks > max_credits || ret2 > max_credits - nblocks) {
+			err = -ENOSPC;
 			goto out;
 		}
 		nblocks += ret2;
